@@ -26,7 +26,7 @@
   </div>
 
   <script>
-    // REPLACE with your actual Web App URL
+    // REPLACE with your NEW Web App URL (the one that shows success)
     const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzrBzVatYPV12J8lQ_ZRAJJS0binepFLd75gcecQcKop3FP2sK435G5Wml_PqHVsB_mxA/exec';
     
     // Calculation functions
@@ -119,11 +119,14 @@
 
     async function loadData() {
       try {
+        console.log('Fetching data from:', WEB_APP_URL);
         const response = await fetch(WEB_APP_URL);
         const rawData = await response.json();
         
-        if (rawData.error) {
-          document.getElementById('loading').innerHTML = 'Error: ' + rawData.error;
+        console.log('Received data:', rawData);
+        
+        if (rawData.status === 'error') {
+          document.getElementById('loading').innerHTML = 'Error: ' + rawData.message;
           return;
         }
         
@@ -132,13 +135,16 @@
         buildTable(processedData);
         
       } catch (error) {
-        document.getElementById('loading').innerHTML = 'Error loading data: ' + error.message;
-        console.error(error);
+        document.getElementById('loading').innerHTML = 'Error loading  ' + error.message;
+        console.error('Fetch error:', error);
       }
     }
 
     function processData(rawData) {
-      if (rawData.length < 2) return [];
+      if (!rawData || !Array.isArray(rawData) || rawData.length < 2) {
+        console.error('Invalid data format:', rawData);
+        return [];
+      }
       
       const headers = rawData[0];
       const rows = rawData.slice(1);
@@ -182,7 +188,6 @@
             cagr3m: null, cagr6m: null, cagr1y: null, cagr3y: null, cagr5y: null,
             cagr15y: null, cagr20y: null,
             rolling6m: null, rolling1y: null, rolling3y: null, rolling5y: null,
-            median1y: null, median3y: null, median5y: null,
             vol1y: null, vol5y: null, vol15y: null, vol20y: null,
             maxDrawdown: null, sharpeRatio: null
           });
