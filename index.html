@@ -8,9 +8,9 @@
 <body>
   <div class="container-fluid mt-4">
     <h1 class="text-center mb-4">NSE Indices Performance Dashboard</h1>
-    <div id="loading" class="text-center">Loading data...</div>
+    <div id="loading" class="text-center">Loading and calculating data...</div>
     <div class="table-responsive">
-      <table class="table table-striped" id="dataTable">
+      <table class="table table-striped table-hover" id="dataTable">
         <thead class="table-dark"></thead>
         <tbody></tbody>
       </table>
@@ -18,16 +18,105 @@
   </div>
 
   <script>
-    // Replace with your actual GitHub username and repo name
-    const CSV_URL = 'https://github.com/rkpgbbs/nseindices/blob/main/nse_data.csv';
+    // REPLACE with your actual CSV URL
+    const CSV_URL = 'https://raw.githubusercontent.com/rkpgbbs/nseindices/main/nse_data.csv';
     
+    // Calculation functions
+    function calculateCAGR(prices, dates, years) {
+      if (prices.length < 2) return null;
+      
+      const startIndex = Math.max(0, prices.length - Math.floor(years * 252) - 1);
+      const endIndex = prices.length - 1;
+      
+      if (startIndex >= endIndex) return null;
+      
+      const startPrice = prices[startIndex];
+      const endPrice = prices[endIndex];
+      
+      if (startPrice <= 0 || endPrice <= 0) return null;
+      
+      const actualYears = (dates[endIndex] - dates[startIndex]) / (1000 * 60 * 60 * 24 * 365.25);
+      if (actualYears <= 0) return null;
+      
+      return (Math.pow(endPrice / startPrice, 1 / actualYears) - 1) * 100;
+    }
+
+    function calculateRollingReturn(prices, period) {
+      if (prices.length < period + 1) return null;
+      const startIndex = prices.length - period - 1;
+      const endIndex = prices.length - 1;
+      const returnVal = ((prices[endIndex] - prices[startIndex]) / prices[startIndex]) * 100;
+      return isNaN(returnVal) ? null : returnVal;
+    }
+
+    function calculateVolatility(prices, period) {
+      if (prices.length < period + 2) return null;
+      
+      const recentPrices = prices.slice(-period - 1);
+      const returns = [];
+      
+      for (let i = 1; i < recentPrices.length; i++) {
+        if (recentPrices[i-1] > 0) {
+          const returnVal = (recentPrices[i] - recentPrices[i-1]) / recentPrices[i-1];
+          returns.push(returnVal);
+        }
+      }
+      
+      if (returns.length < 2) return null;
+      
+      const avg = returns.reduce((a, b) => a + b, 0) / returns.length;
+      const variance = returns.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / (returns.length - 1);
+      return Math.sqrt(variance) * Math.sqrt(252) * 100;
+    }
+
+    function calculateMaxDrawdown(prices) {
+      if (prices.length < 2) return null;
+      
+      let peak = prices[0];
+      let maxDrawdown = 0;
+      
+      for (let i = 1; i < prices.length; i++) {
+        if (prices[i] > peak) {
+          peak = prices[i];
+        } else if (peak > 0) {
+          const drawdown = (peak - prices[i]) / peak;
+          if (drawdown > maxDrawdown) {
+            maxDrawdown = drawdown;
+          }
+        }
+      }
+      
+      return maxDrawdown * 100;
+    }
+
+    function calculateSharpeRatio(cagr, volatility) {
+      if (volatility === null || volatility === 0) return null;
+      const riskFreeRate = 6.5;
+      return (cagr - riskFreeRate) / volatility;
+    }
+
+    function formatValue(value, isPercentage = true) {
+      if (value === null || value === undefined || isNaN(value)) return '-';
+      if (isPercentage) {
+        return value.toFixed(2) + '%';
+      } else {
+        return value.toFixed(2);
+      }
+    }
+
+    function getValueClass(value) {
+      if (value === null || value === '-' || value === 0) return '';
+      return value > 0 ? 'text-success' : 'text-danger';
+    }
+
     function loadData() {
       PapaParse.parse(CSV_URL, {
         download: true,
         header: false,
         complete: function(results) {
           console.log('Loaded ', results.data.length, 'rows');
-          buildTable(results.data);
+          const processedData = processData(results.data);
+          buildTable(processedData);
         },
         error: function(error) {
           console.error('Error:', error);
@@ -36,30 +125,142 @@
       });
     }
 
+    function processData(rawData) {
+      if (!rawData || rawData.length < 2) return [];
+      
+      const headers = rawData[0];
+      const rows = rawData.slice(1);
+      
+      // Convert date strings to Date objects and filter valid rows
+      const validRows = rows.filter(row => row[0] && !isNaN(new Date(row[0]).getTime()));
+      const dates = validRows.map(row => new Date(row[0]));
+      
+      // Get index column indices (B to AQ = columns 1 to 42)
+      const indexColumns = [];
+      for (let i = 1; i <= 42; i++) {
+        if (i < headers.length) {
+          indexColumns.push({
+            name: headers[i],
+            columnIndex: i
+          });
+        }
+      }
+      
+      // Process each index
+      const results = [];
+      
+      indexColumns.forEach(indexInfo => {
+        const prices = [];
+        const indexDates = [];
+        
+        // Extract valid price data for this index
+        validRows.forEach((row, rowIndex) => {
+          const price = parseFloat(row[indexInfo.columnIndex]);
+          if (!isNaN(price) && price > 0) {
+            prices.push(price);
+            indexDates.push(dates[rowIndex]);
+          }
+        });
+        
+        if (prices.length < 10) {
+          // Not enough data
+          results.push({
+            indexName: indexInfo.name,
+            dataPoints: prices.length,
+            cagr3m: null, cagr6m: null, cagr1y: null, cagr3y: null, cagr5y: null,
+            cagr15y: null, cagr20y: null,
+            rolling6m: null, rolling1y: null, rolling3y: null, rolling5y: null,
+            vol1y: null, vol5y: null, vol15y: null, vol20y: null,
+            maxDrawdown: null, sharpeRatio: null
+          });
+          return;
+        }
+        
+        // Calculate all metrics
+        const result = {
+          indexName: indexInfo.name,
+          dataPoints: prices.length
+        };
+        
+        // CAGR calculations
+        result.cagr3m = calculateCAGR(prices, indexDates, 0.25);
+        result.cagr6m = calculateCAGR(prices, indexDates, 0.5);
+        result.cagr1y = calculateCAGR(prices, indexDates, 1);
+        result.cagr3y = calculateCAGR(prices, indexDates, 3);
+        result.cagr5y = calculateCAGR(prices, indexDates, 5);
+        result.cagr15y = calculateCAGR(prices, indexDates, 15);
+        result.cagr20y = calculateCAGR(prices, indexDates, 20);
+        
+        // Rolling returns
+        result.rolling6m = calculateRollingReturn(prices, Math.min(126, prices.length - 1));
+        result.rolling1y = calculateRollingReturn(prices, Math.min(252, prices.length - 1));
+        result.rolling3y = calculateRollingReturn(prices, Math.min(756, prices.length - 1));
+        result.rolling5y = calculateRollingReturn(prices, Math.min(1260, prices.length - 1));
+        
+        // Volatility
+        result.vol1y = calculateVolatility(prices, Math.min(252, prices.length - 2));
+        result.vol5y = calculateVolatility(prices, Math.min(1260, prices.length - 2));
+        result.vol15y = calculateVolatility(prices, Math.min(3780, prices.length - 2));
+        result.vol20y = calculateVolatility(prices, Math.min(5040, prices.length - 2));
+        
+        // Max Drawdown (use all available data)
+        result.maxDrawdown = calculateMaxDrawdown(prices);
+        
+        // Sharpe Ratio
+        result.sharpeRatio = calculateSharpeRatio(result.cagr1y, result.vol1y);
+        
+        results.push(result);
+      });
+      
+      return results;
+    }
+
     function buildTable(data) {
-      if (!data || data.length < 2) {
+      if (data.length === 0) {
         document.getElementById('loading').innerHTML = 'No data available';
         return;
       }
       
-      const headers = data[0];
-      const rows = data.slice(1);
+      // Define columns
+      const columns = [
+        { key: 'indexName', label: 'Index Name', width: '200px' },
+        { key: 'dataPoints', label: 'Data Points', width: '100px' },
+        { key: 'cagr3m', label: 'CAGR (3M)', width: '100px' },
+        { key: 'cagr6m', label: 'CAGR (6M)', width: '100px' },
+        { key: 'cagr1y', label: 'CAGR (1Y)', width: '100px' },
+        { key: 'cagr3y', label: 'CAGR (3Y)', width: '100px' },
+        { key: 'cagr5y', label: 'CAGR (5Y)', width: '100px' },
+        { key: 'cagr15y', label: 'CAGR (15Y)', width: '100px' },
+        { key: 'cagr20y', label: 'CAGR (20Y)', width: '100px' },
+        { key: 'rolling6m', label: 'Rolling (6M)', width: '120px' },
+        { key: 'rolling1y', label: 'Rolling (1Y)', width: '120px' },
+        { key: 'rolling3y', label: 'Rolling (3Y)', width: '120px' },
+        { key: 'rolling5y', label: 'Rolling (5Y)', width: '120px' },
+        { key: 'vol1y', label: 'Vol (1Y)', width: '100px' },
+        { key: 'vol5y', label: 'Vol (5Y)', width: '100px' },
+        { key: 'vol15y', label: 'Vol (15Y)', width: '100px' },
+        { key: 'vol20y', label: 'Vol (20Y)', width: '100px' },
+        { key: 'maxDrawdown', label: 'Max Drawdown', width: '120px' },
+        { key: 'sharpeRatio', label: 'Sharpe Ratio', width: '120px' }
+      ];
       
       // Build header
       let headerHTML = '<tr>';
-      headers.forEach(header => {
-        headerHTML += `<th>${header}</th>`;
+      columns.forEach(col => {
+        headerHTML += `<th style="min-width: ${col.width};">${col.label}</th>`;
       });
       headerHTML += '</tr>';
       document.querySelector('#dataTable thead').innerHTML = headerHTML;
       
-      // Build rows (show first 50 for performance)
+      // Build rows
       let rowsHTML = '';
-      const displayRows = rows.slice(0, 50);
-      displayRows.forEach(row => {
+      data.forEach(row => {
         rowsHTML += '<tr>';
-        row.forEach(cell => {
-          rowsHTML += `<td>${cell || ''}</td>`;
+        columns.forEach(col => {
+          let value = row[col.key];
+          let displayValue = formatValue(value, col.key !== 'dataPoints' && col.key !== 'sharpeRatio');
+          let valueClass = getValueClass(value);
+          rowsHTML += `<td class="text-end ${valueClass}">${displayValue}</td>`;
         });
         rowsHTML += '</tr>';
       });
